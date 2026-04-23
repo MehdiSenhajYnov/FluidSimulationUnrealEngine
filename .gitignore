@@ -1,0 +1,33 @@
+# Unreal Engine generated data
+/Binaries/
+/DerivedDataCache/
+/Intermediate/
+/Saved/
+
+# IDE and editor files
+/.idea/
+/.vs/
+/.vscode/
+*.code-workspace
+
+# Build system output
+Makefile
+cmake-build-*/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Visual Studio / Rider
+*.VC.db
+*.VC.opendb
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# JetBrains Rider
+*.DotSettings.user
+
+# Logs and local caches
+*.log
