@@ -1,6 +1,3 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
 #include "FluidManager.h"
 #include "FluidParticleSoA.h"
 #include "Async/ParallelFor.h"
@@ -34,33 +31,32 @@ void AFluidContainer::BeginPlay()
 	{
 		Particles = NewObject<UFluidParticleSoA>(this);
 		FVector2D SafeContainerBounds = FluidInfo->ContainerBounds;
-		// pour faire en sorte que ca spawn pas en touchant directement les mur
 		SafeContainerBounds.X -= (ParticleRadius * 2);
 		SafeContainerBounds.Y -= (ParticleRadius * 2);
 		SafeContainerBounds.X *= 0.8;
 		SafeContainerBounds.Y *= 0.8;
 		
-			FVector2D StartPosition = -SafeContainerBounds/ 2;
-			Particles->Init(FluidInfo->NbOfParticles, StartPosition, SafeContainerBounds, FluidInfo->InfluenceRadius / 2);
-			const int RequestedParticleCount = FluidInfo->NbOfParticles;
-			const int SpawnedParticleCount = Particles->Position.Num();
-			if (SpawnedParticleCount > 0 && SpawnedParticleCount < RequestedParticleCount && GEngine)
+		FVector2D StartPosition = -SafeContainerBounds/ 2;
+		Particles->Init(FluidInfo->NbOfParticles, StartPosition, SafeContainerBounds, FluidInfo->InfluenceRadius / 2);
+		const int RequestedParticleCount = FluidInfo->NbOfParticles;
+		const int SpawnedParticleCount = Particles->Position.Num();
+		if (SpawnedParticleCount > 0 && SpawnedParticleCount < RequestedParticleCount && GEngine)
+		{
+			const FString Message = FString::Printf(
+				TEXT("Fluid: %d particules demandees, %d creees seulement. Container trop petit / espacement trop grand."),
+				RequestedParticleCount,
+				SpawnedParticleCount);
+			GEngine->AddOnScreenDebugMessage(INDEX_NONE, 8.0f, FColor::Orange, Message);
+		}
+		if (Particles->Position.IsEmpty())
+		{
+			UE_LOG(LogTemp, Error, TEXT("No fluid particles were spawned"));
+			if (GEngine)
 			{
-				const FString Message = FString::Printf(
-					TEXT("Fluid: %d particules demandees, %d creees seulement. Container trop petit / espacement trop grand."),
-					RequestedParticleCount,
-					SpawnedParticleCount);
-				GEngine->AddOnScreenDebugMessage(INDEX_NONE, 8.0f, FColor::Orange, Message);
+				GEngine->AddOnScreenDebugMessage(INDEX_NONE, 8.0f, FColor::Red, TEXT("Fluid: aucune particule creee. Verifie NbOfParticles, ContainerBounds et InfluenceRadius."));
 			}
-			if (Particles->Position.IsEmpty())
-			{
-				UE_LOG(LogTemp, Error, TEXT("No fluid particles were spawned"));
-				if (GEngine)
-				{
-					GEngine->AddOnScreenDebugMessage(INDEX_NONE, 8.0f, FColor::Red, TEXT("Fluid: aucune particule creee. Verifie NbOfParticles, ContainerBounds et InfluenceRadius."));
-				}
-				return;
-			}
+			return;
+		}
 		ParticleMass = GetMass(FluidInfo->WantedRestDensity, GetContainerArea(), Particles->Id.Num(), FluidInfo->InfluenceRadius);
 		
 		
@@ -78,6 +74,7 @@ void AFluidContainer::BeginPlay()
 
 FVector AFluidContainer::ParticleToWorldPosition(const FVector2D& Position) const
 {
+	// La simulation vit en 2D (X/Y). Dans Unreal, on l'affiche dans le plan X/Z.
 	return GetActorLocation() + FVector(Position.X * WorldScale, 0.0f, Position.Y * WorldScale);
 }
 
@@ -106,7 +103,13 @@ bool AFluidContainer::UpdateKernelCache()
 
 void AFluidContainer::EnsureSimulationBuffers(int ParticleCount)
 {
+	const int PreviousNeighborBufferCount = NeighborsByParticleBuffer.Num();
 	NeighborsByParticleBuffer.SetNum(ParticleCount);
+	for (int ParticleId = PreviousNeighborBufferCount; ParticleId < ParticleCount; ++ParticleId)
+	{
+		NeighborsByParticleBuffer[ParticleId].Reserve(32);
+	}
+
 	DensityBuffer.SetNumUninitialized(ParticleCount);
 	PressureBuffer.SetNumUninitialized(ParticleCount);
 }
@@ -128,50 +131,41 @@ bool AFluidContainer::HasValidSpatialGrid() const
 	return SpatialCellSize > 0.0f
 		&& SpatialGridSize.X > 0
 		&& SpatialGridSize.Y > 0
-		&& SpatialGridSize.Z > 0
-		&& SpatialCellHeads.Num() == SpatialGridSize.X * SpatialGridSize.Y * SpatialGridSize.Z
+		&& SpatialCellHeads.Num() == SpatialGridSize.X * SpatialGridSize.Y
 		&& IsValid(Particles)
 		&& SpatialNextParticle.Num() == Particles->Position.Num();
 }
 
-FVector AFluidContainer::GetParticleSimulationPosition(int ParticleId) const
+const FVector2D& AFluidContainer::GetParticleSimulationPosition(int ParticleId) const
 {
-	const FVector2D Position = Particles->Position[ParticleId];
-	// The neighbor grid is 3D internally. The current solver is 2D, so all
-	// particles live on one Z slice; moving to 3D only needs this mapping to
-	// return the particle's real Z coordinate and the grid depth to exceed one.
-	return FVector(Position.X, Position.Y, 0.0f);
+	return Particles->Position[ParticleId];
 }
 
-FIntVector AFluidContainer::GetSpatialCellCoords(const FVector& SimulationPosition) const
+FIntPoint AFluidContainer::GetSpatialCellCoords(const FVector2D& SimulationPosition) const
 {
-	if (SpatialCellSize <= 0.0f || SpatialGridSize.X <= 0 || SpatialGridSize.Y <= 0 || SpatialGridSize.Z <= 0)
+	if (SpatialCellSize <= 0.0f || SpatialGridSize.X <= 0 || SpatialGridSize.Y <= 0)
 	{
-		return FIntVector::ZeroValue;
+		return FIntPoint(0, 0);
 	}
 
-	const FVector LocalPosition = (SimulationPosition - SpatialGridOrigin) / SpatialCellSize;
-	return FIntVector(
+	const FVector2D LocalPosition = (SimulationPosition - SpatialGridOrigin) / SpatialCellSize;
+	return FIntPoint(
 		FMath::Clamp(FMath::FloorToInt(LocalPosition.X), 0, SpatialGridSize.X - 1),
-		FMath::Clamp(FMath::FloorToInt(LocalPosition.Y), 0, SpatialGridSize.Y - 1),
-		FMath::Clamp(FMath::FloorToInt(LocalPosition.Z), 0, SpatialGridSize.Z - 1));
+		FMath::Clamp(FMath::FloorToInt(LocalPosition.Y), 0, SpatialGridSize.Y - 1));
 }
 
-int AFluidContainer::GetSpatialCellIndex(const FIntVector& CellCoords) const
+int AFluidContainer::GetSpatialCellIndex(const FIntPoint& CellCoords) const
 {
 	return CellCoords.X
-		+ CellCoords.Y * SpatialGridSize.X
-		+ CellCoords.Z * SpatialGridSize.X * SpatialGridSize.Y;
+		+ CellCoords.Y * SpatialGridSize.X;
 }
 
-bool AFluidContainer::IsSpatialCellInBounds(const FIntVector& CellCoords) const
+bool AFluidContainer::IsSpatialCellInBounds(const FIntPoint& CellCoords) const
 {
 	return CellCoords.X >= 0
 		&& CellCoords.Y >= 0
-		&& CellCoords.Z >= 0
 		&& CellCoords.X < SpatialGridSize.X
-		&& CellCoords.Y < SpatialGridSize.Y
-		&& CellCoords.Z < SpatialGridSize.Z;
+		&& CellCoords.Y < SpatialGridSize.Y;
 }
 
 void AFluidContainer::BuildSpatialGrid()
@@ -180,26 +174,27 @@ void AFluidContainer::BuildSpatialGrid()
 	{
 		SpatialCellHeads.Reset();
 		SpatialNextParticle.Reset();
-		SpatialGridSize = FIntVector::ZeroValue;
+		SpatialGridSize = FIntPoint(0, 0);
 		SpatialCellSize = 0.0f;
 		return;
 	}
 
 	SpatialCellSize = FluidInfo->InfluenceRadius;
-	SpatialGridOrigin = FVector(-FluidInfo->ContainerBounds.X * 0.5f, -FluidInfo->ContainerBounds.Y * 0.5f, 0.0f);
+	SpatialGridOrigin = FVector2D(-FluidInfo->ContainerBounds.X * 0.5f, -FluidInfo->ContainerBounds.Y * 0.5f);
 
 	const int GridWidth = FMath::Max(1, FMath::CeilToInt(FluidInfo->ContainerBounds.X / SpatialCellSize));
 	const int GridHeight = FMath::Max(1, FMath::CeilToInt(FluidInfo->ContainerBounds.Y / SpatialCellSize));
-	const int GridDepth = 1;
-	SpatialGridSize = FIntVector(GridWidth, GridHeight, GridDepth);
+	SpatialGridSize = FIntPoint(GridWidth, GridHeight);
 
-	const int CellCount = SpatialGridSize.X * SpatialGridSize.Y * SpatialGridSize.Z;
+	const int CellCount = SpatialGridSize.X * SpatialGridSize.Y;
 	SpatialCellHeads.Init(INDEX_NONE, CellCount);
 	SpatialNextParticle.SetNumUninitialized(Particles->Position.Num());
 
+	// Chaque cellule stocke la première particule; SpatialNextParticle forme ensuite
+	// une liste chaînée des autres particules présentes dans cette même cellule.
 	for (int ParticleId = 0; ParticleId < Particles->Position.Num(); ++ParticleId)
 	{
-		const FIntVector CellCoords = GetSpatialCellCoords(GetParticleSimulationPosition(ParticleId));
+		const FIntPoint CellCoords = GetSpatialCellCoords(GetParticleSimulationPosition(ParticleId));
 		const int CellIndex = GetSpatialCellIndex(CellCoords);
 		SpatialNextParticle[ParticleId] = SpatialCellHeads[CellIndex];
 		SpatialCellHeads[CellIndex] = ParticleId;
@@ -215,8 +210,9 @@ void AFluidContainer::Tick(float DeltaSeconds)
 		return;
 	}
 	DrawDebugBox(GetWorld(), GetActorLocation(), FVector(FluidInfo->ContainerBounds.X * WorldScale / 2, 5, FluidInfo->ContainerBounds.Y * WorldScale / 2), FColor::Red, false, -1, 0, 10);
-	
-	
+		
+	// La frame est découpée en sous-steps fixes pour garder le solveur plus stable
+	// quand le framerate varie.
 	float AccumulatedTime = 0.0f;
 	while (AccumulatedTime < DeltaSeconds)
 	{
@@ -238,6 +234,8 @@ void AFluidContainer::UpdateParticleVisuals()
 	const int ParticleCount = Particles->Position.Num();
 	for (int ParticleId = 0; ParticleId < ParticleCount; ++ParticleId)
 	{
+		// On ne marque le render state dirty qu'à la dernière instance pour éviter
+		// de forcer Unreal à rafraîchir le composant après chaque particule.
 		const bool bIsLastInstance = ParticleId == ParticleCount - 1;
 		FTransform T(FRotator::ZeroRotator, ParticleToWorldPosition(Particles->Position[ParticleId]), MeshScale);
 		InstancedStaticMesh->UpdateInstanceTransform(ParticleId, T, true, bIsLastInstance, true);
@@ -273,6 +271,7 @@ void AFluidContainer::StepSimulation(float DeltaTime)
 	constexpr int32 ParallelParticleThreshold = 256;
 	const bool bUseParallelFor = ParticleCount >= ParallelParticleThreshold;
 
+	// La pression dépend de la densité de toutes les particules.
 	auto ComputeDensityAndPressure = [this, Mass](int32 ParticleIndex)
 	{
 		const int ParticleId = Particles->Id[ParticleIndex];
@@ -378,15 +377,6 @@ void AFluidContainer::StepSimulation(float DeltaTime)
 		{
 			Particles->Velocity[ParticleId] = Particles->Velocity[ParticleId].GetSafeNormal() * MaxVelocity;
 		}
-		
-		
-		
-		// Particles->Position[ParticleId].X = FMath::Max(-1 * FluidInfo->ContainerBounds.X / 2, Particles->Position[ParticleId].X);
-		// Particles->Position[ParticleId].Y = FMath::Max(-1 * FluidInfo->ContainerBounds.Y / 2, Particles->Position[ParticleId].Y);
-		//
-		// Particles->Position[ParticleId].X = FMath::Min(FluidInfo->ContainerBounds.X / 2, Particles->Position[ParticleId].X);
-		// Particles->Position[ParticleId].Y = FMath::Min(FluidInfo->ContainerBounds.Y / 2, Particles->Position[ParticleId].Y);		
-		
 	};
 
 	if (bUseParallelFor)
@@ -531,6 +521,8 @@ float AFluidContainer::GetPression(float RestDensity, float WantedRestDensity)
 		return 0.0f;
 	}
 
+	// Equation de Tait: la pression devient négative sous la densité cible, ce qui
+	// permet aux particules trop espacées de se ré-attirer.
 	return FluidInfo->PressureStiffness * (FMath::Pow(RestDensity / WantedRestDensity, K_TAIT) - 1.0f);
 }
 
@@ -557,8 +549,10 @@ FVector2D AFluidContainer::GetPressureGradient(const TArray<FFluidNeighborInfo>&
 		const float NeighborDensity = Densities[IdOfNeighbor];
 		const float NeighborPression = Pressions[IdOfNeighbor];
 		const FVector2D UnitDir = !FMath::IsNearlyZero(Neighbor.Distance)
-			? FVector2D(Neighbor.Delta.X / Neighbor.Distance, Neighbor.Delta.Y / Neighbor.Distance)
+			? Neighbor.Delta / Neighbor.Distance
 			: FVector2D::ZeroVector;
+		// Forme symétrique: chaque paire contribue avec la pression des deux côtés,
+		// ce qui évite un biais directionnel dans les forces de pression.
 		PressureGradient += Mass * (Pression / FMath::Square(Density) + NeighborPression / FMath::Square(NeighborDensity)) * Neighbor.DSpiky * UnitDir;
 	}
 	
@@ -608,8 +602,8 @@ FVector2D AFluidContainer::GetExternalForces(float Density)
 		return Gravity * GravityScale;
 	}
 
-	// Gravity is authored as the acceleration wanted at rest density; convert it
-	// to a force-density term, then divide by the current density.
+	// La gravité est réglée comme une accélération à densité de repos. On la pondère
+	// par la densité actuelle pour rester cohérent avec les autres termes SPH.
 	return Gravity * GravityScale * (FluidInfo->WantedRestDensity / Density);
 }
 
@@ -631,11 +625,8 @@ void AFluidContainer::UpdateAutoParticleScale()
 }
 
 
-// Utilities
-
 bool AFluidContainer::GetDistanceWith(float& OutResult, const int& ParticleAId, const int& ParticleBId)
 {
-	// check des conditions invalide
 	if (ParticleAId < 0 || ParticleBId < 0 || ParticleAId >= Particles->Position.Num() || ParticleBId >= Particles->Position.Num())
 	{
 		return false;
@@ -660,43 +651,42 @@ void AFluidContainer::GetAllNeighborsIdOf(int IdToCheck, TArray<int>& OutResult)
 
 void AFluidContainer::GetAllNeighborsOf(int IdToCheck, TArray<FFluidNeighborInfo>& OutResult)
 {
-	OutResult.Empty();
+	OutResult.Reset();
 
 	if (!HasValidSpatialGrid() || IdToCheck < 0 || IdToCheck >= Particles->Position.Num())
 	{
 		return;
 	}
 
-	const FVector ParticlePosition = GetParticleSimulationPosition(IdToCheck);
-	const FIntVector CenterCellCoords = GetSpatialCellCoords(ParticlePosition);
-	
-	for (int Z = CenterCellCoords.Z - 1; Z <= CenterCellCoords.Z + 1; ++Z)
+	const FVector2D& ParticlePosition = GetParticleSimulationPosition(IdToCheck);
+	const FIntPoint CenterCellCoords = GetSpatialCellCoords(ParticlePosition);
+		
+	// Comme la taille d'une cellule vaut le rayon d'influence, un voisin valide ne
+	// peut être que dans la cellule courante ou dans l'une des 8 cellules autour.
+	for (int Y = CenterCellCoords.Y - 1; Y <= CenterCellCoords.Y + 1; ++Y)
 	{
-		for (int Y = CenterCellCoords.Y - 1; Y <= CenterCellCoords.Y + 1; ++Y)
+		for (int X = CenterCellCoords.X - 1; X <= CenterCellCoords.X + 1; ++X)
 		{
-			for (int X = CenterCellCoords.X - 1; X <= CenterCellCoords.X + 1; ++X)
+			const FIntPoint CellCoords(X, Y);
+			if (!IsSpatialCellInBounds(CellCoords))
 			{
-				const FIntVector CellCoords(X, Y, Z);
-				if (!IsSpatialCellInBounds(CellCoords))
-				{
-					continue;
-				}
+				continue;
+			}
 
-				for (int NeighborId = SpatialCellHeads[GetSpatialCellIndex(CellCoords)]; NeighborId != INDEX_NONE; NeighborId = SpatialNextParticle[NeighborId])
+			for (int NeighborId = SpatialCellHeads[GetSpatialCellIndex(CellCoords)]; NeighborId != INDEX_NONE; NeighborId = SpatialNextParticle[NeighborId])
+			{
+				const FVector2D ToNeighbor = GetParticleSimulationPosition(NeighborId) - ParticlePosition;
+				const float DistanceSquared = ToNeighbor.SizeSquared();
+				if (DistanceSquared <= KernelCache.InfluenceRadiusSquared)
 				{
-					const FVector ToNeighbor = GetParticleSimulationPosition(NeighborId) - ParticlePosition;
-					const float DistanceSquared = ToNeighbor.SizeSquared();
-					if (DistanceSquared <= KernelCache.InfluenceRadiusSquared)
-					{
-						FFluidNeighborInfo Neighbor;
-						Neighbor.Id = NeighborId;
-						Neighbor.Delta = ToNeighbor;
-						Neighbor.Distance = FMath::Sqrt(DistanceSquared);
-						Neighbor.PolyKernel = GetCachedPoly2DKernel(DistanceSquared);
-						Neighbor.DSpiky = GetCachedDSpiky2DKernel(Neighbor.Distance);
-						Neighbor.ViscosityWeight = -Neighbor.DSpiky * Neighbor.Distance / (DistanceSquared + KernelCache.ViscosityDenominatorOffset);
-						OutResult.Add(Neighbor);
-					}
+					FFluidNeighborInfo Neighbor;
+					Neighbor.Id = NeighborId;
+					Neighbor.Delta = ToNeighbor;
+					Neighbor.Distance = FMath::Sqrt(DistanceSquared);
+					Neighbor.PolyKernel = GetCachedPoly2DKernel(DistanceSquared);
+					Neighbor.DSpiky = GetCachedDSpiky2DKernel(Neighbor.Distance);
+					Neighbor.ViscosityWeight = -Neighbor.DSpiky * Neighbor.Distance / (DistanceSquared + KernelCache.ViscosityDenominatorOffset);
+					OutResult.Add(Neighbor);
 				}
 			}
 		}

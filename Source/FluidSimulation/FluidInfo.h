@@ -1,14 +1,9 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "FluidInfo.generated.h"
 
-/**
- * 
- */
 UCLASS()
 class FLUIDSIMULATION_API UFluidInfo : public UDataAsset
 {
@@ -28,7 +23,7 @@ public:
 	float WantedRestDensity = 1000;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid", meta=(Tooltip="Force de viscosité"))
-	float ViscosityStrength; //u
+	float ViscosityStrength;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid", meta=(Tooltip="facteur de viscosité"))
 	float ViscosityFactor;

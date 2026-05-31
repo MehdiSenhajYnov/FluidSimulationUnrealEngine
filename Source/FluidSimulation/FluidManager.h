@@ -1,5 +1,3 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -16,7 +14,7 @@ class UStaticMesh;
 struct FFluidNeighborInfo
 {
 	int Id = INDEX_NONE;
-	FVector Delta = FVector::ZeroVector;
+	FVector2D Delta = FVector2D::ZeroVector;
 	float Distance = 0.0f;
 	float PolyKernel = 0.0f;
 	float DSpiky = 0.0f;
@@ -32,9 +30,6 @@ struct FFluidKernelCache
 	float ViscosityDenominatorOffset = 0.0f;
 };
 
-/**
- * 
- */
 UCLASS()
 class FLUIDSIMULATION_API AFluidContainer : public AActor
 {
@@ -50,9 +45,6 @@ public:
 	void StepSimulation(float DeltaTime);
 	void UpdateParticleVisuals();
 public:
-	// h Max distance with neighbors
-	// r current distance with neighbors
-	// DSpiky dérivé de GetSpiky
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Fluid")
 	float FixedDt = 0.003;
 	
@@ -127,8 +119,6 @@ public:
 
 	void UpdateAutoParticleScale();
 	
-	// Utilities
-	
 	UFUNCTION(BlueprintCallable, Category = "Fluid")
 	bool GetDistanceWith(float& OutResult, const int& ParticleAId, const int& ParticleBId);
 	
@@ -142,15 +132,15 @@ private:
 	float GetCachedDSpiky2DKernel(float Distance) const;
 	void BuildSpatialGrid();
 	bool HasValidSpatialGrid() const;
-	FVector GetParticleSimulationPosition(int ParticleId) const;
-	FIntVector GetSpatialCellCoords(const FVector& SimulationPosition) const;
-	int GetSpatialCellIndex(const FIntVector& CellCoords) const;
-	bool IsSpatialCellInBounds(const FIntVector& CellCoords) const;
+	const FVector2D& GetParticleSimulationPosition(int ParticleId) const;
+	FIntPoint GetSpatialCellCoords(const FVector2D& SimulationPosition) const;
+	int GetSpatialCellIndex(const FIntPoint& CellCoords) const;
+	bool IsSpatialCellInBounds(const FIntPoint& CellCoords) const;
 
 	TArray<int> SpatialCellHeads;
 	TArray<int> SpatialNextParticle;
-	FIntVector SpatialGridSize = FIntVector::ZeroValue;
-	FVector SpatialGridOrigin = FVector::ZeroVector;
+	FIntPoint SpatialGridSize = FIntPoint(0, 0);
+	FVector2D SpatialGridOrigin = FVector2D::ZeroVector;
 	float SpatialCellSize = 0.0f;
 
 	FFluidKernelCache KernelCache;

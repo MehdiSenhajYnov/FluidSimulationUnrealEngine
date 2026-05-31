@@ -1,14 +1,9 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
 #include "FluidParticleSoA.generated.h"
 
-/**
- * 
- */
 UCLASS()
 class FLUIDSIMULATION_API UFluidParticleSoA : public UObject
 {
@@ -30,6 +25,8 @@ public:
 		const int MaxColumns = FMath::Max(1, FMath::FloorToInt(ContainerBounds.X / SpaceBetween) + 1);
 		const int MaxRows = FMath::Max(1, FMath::FloorToInt(ContainerBounds.Y / SpaceBetween) + 1);
 		const int MaxParticlesInBounds = MaxColumns * MaxRows;
+		// On place les particules sur une grille régulière. Si la demande dépasse
+		// ce qui rentre dans la zone de spawn, on garde seulement ce qui est plaçable.
 		const int ParticlesToSpawn = FMath::Min(NbOfParticles, MaxParticlesInBounds);
 		
 		if (ParticlesToSpawn < NbOfParticles)
